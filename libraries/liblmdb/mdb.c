@@ -519,6 +519,14 @@ typedef pthread_mutex_t *mdb_mutexref_t;
 #define MUTEXNAME_PREFIX		"/MDB"
 #endif
 
+#ifdef MDB_USE_POSIX_SEM
+	/** Maximum length of a caller-supplied semaphore base name, including the
+	 *	'r'/'w' suffix that #MUTEXNAME() appends but excluding the terminating
+	 *	NUL. macOS limits POSIX semaphore names to PSEMNAMLEN (31) characters.
+	 */
+#define MDB_SEMNAME_MAX		31
+#endif
+
 /** @} */
 
 #ifdef MDB_ROBUST_SUPPORTED
@@ -1594,8 +1602,23 @@ struct MDB_env {
 	mdb_mutex_t	me_rmutex;
 	mdb_mutex_t	me_wmutex;
 # if defined(_WIN32) || defined(MDB_USE_POSIX_SEM)
+#  ifdef MDB_USE_POSIX_SEM
+	/** Half-initialized name of mutexes, to be completed by #MUTEXNAME().
+	 *	Sized to hold either the default name or a caller-supplied base name
+	 *	plus the 'r'/'w' suffix and terminating NUL.
+	 */
+	char		me_mutexname[MDB_SEMNAME_MAX + 1];
+	/** Caller-supplied base name for the lock semaphores, or "" for the
+	 *	default derived from a hash of the lock file. See
+	 *	#mdb_env_set_semaphore_name().
+	 */
+	char		me_semname[MDB_SEMNAME_MAX];
+	/** Index within #me_mutexname where #MUTEXNAME() writes the 'r'/'w' char. */
+	int		me_mnamechar;
+#  else
 	/** Half-initialized name of mutexes, to be completed by #MUTEXNAME() */
 	char		me_mutexname[sizeof(MUTEXNAME_PREFIX) + 11];
+#  endif
 # endif
 #endif
 #ifdef MDB_VL32
@@ -4781,6 +4804,35 @@ mdb_env_set_maxdbs(MDB_env *env, MDB_dbi dbs)
 }
 
 int ESECT
+mdb_env_set_semaphore_name(MDB_env *env, const char *name)
+{
+#ifdef MDB_USE_POSIX_SEM
+	size_t len;
+	if (env->me_map)
+		return EINVAL;
+	if (name == NULL || name[0] == '\0') {
+		env->me_semname[0] = '\0';
+		MDB_TRACE(("%p, (null)", env));
+		return MDB_SUCCESS;
+	}
+	len = strlen(name);
+	/* The base name plus the 'r'/'w' suffix that MUTEXNAME() appends must
+	 * fit within MDB_SEMNAME_MAX, and the base name plus its NUL must fit
+	 * within me_semname.
+	 */
+	if (len + 1 > MDB_SEMNAME_MAX)
+		return EINVAL;
+	strcpy(env->me_semname, name);
+	MDB_TRACE(("%p, %s", env, name));
+	return MDB_SUCCESS;
+#else
+	(void)env;
+	(void)name;
+	return EINVAL;
+#endif
+}
+
+int ESECT
 mdb_env_set_maxreaders(MDB_env *env, unsigned int readers)
 {
 	if (env->me_map || readers < 1)
@@ -5432,14 +5484,33 @@ static void ESECT
 mdb_env_mname_init(MDB_env *env)
 {
 	char *nm = env->me_mutexname;
+#ifdef MDB_USE_POSIX_SEM
+	if (env->me_semname[0]) {
+		/* Use the caller-supplied base name and append the 'r'/'w' char at
+		 * the end, so processes that agree on the name share the semaphores
+		 * regardless of the lock file's device and inode. */
+		size_t len = strlen(env->me_semname);
+		memcpy(nm, env->me_semname, len);
+		nm[len + 1] = '\0';
+		env->me_mnamechar = (int)len;
+		return;
+	}
+	env->me_mnamechar = sizeof(MUTEXNAME_PREFIX) - 1;
+#endif
 	strcpy(nm, MUTEXNAME_PREFIX);
 	mdb_pack85(env->me_txns->mti_mutexid, nm + sizeof(MUTEXNAME_PREFIX));
 }
 
 /** Return env->me_mutexname after filling in ch ('r'/'w') for convenience */
+#ifdef MDB_USE_POSIX_SEM
+#define MUTEXNAME(env, ch) ( \
+		(void) ((env)->me_mutexname[(env)->me_mnamechar] = (ch)), \
+		(env)->me_mutexname)
+#else
 #define MUTEXNAME(env, ch) ( \
 		(void) ((env)->me_mutexname[sizeof(MUTEXNAME_PREFIX)-1] = (ch)), \
 		(env)->me_mutexname)
+#endif
 
 #endif
 
