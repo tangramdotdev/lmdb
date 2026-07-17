@@ -935,6 +935,35 @@ int  mdb_env_get_maxreaders(MDB_env *env, unsigned int *readers);
 	 */
 int  mdb_env_set_maxdbs(MDB_env *env, MDB_dbi dbs);
 
+	/** @brief Set the base name of the POSIX semaphores used for locking.
+	 *
+	 * This function is only effective when LMDB is built with
+	 * #MDB_USE_POSIX_SEM (for example on macOS). By default the reader and
+	 * writer lock semaphores are named from a hash of the lock file's device
+	 * and inode, which prevents processes in different sandboxes from agreeing
+	 * on a name. Setting an explicit base name lets cooperating processes share
+	 * the same semaphores; the name should be scoped so that every process that
+	 * shares the environment can open it, for example by prefixing it with a
+	 * macOS application group identifier.
+	 *
+	 * LMDB appends a single 'r' or 'w' character to the base name to form the
+	 * two semaphore names, so the base name plus one character must not exceed
+	 * the platform limit (31 characters on macOS). Pass NULL or an empty string
+	 * to restore the default hash-derived names.
+	 *
+	 * This function may only be called after #mdb_env_create() and before
+	 * #mdb_env_open().
+	 * @param[in] env An environment handle returned by #mdb_env_create()
+	 * @param[in] name The semaphore base name, or NULL for the default
+	 * @return A non-zero error value on failure and 0 on success. Some possible
+	 * errors are:
+	 * <ul>
+	 *	<li>EINVAL - the name is too long, the environment is already open, or
+	 *		LMDB was not built with #MDB_USE_POSIX_SEM.
+	 * </ul>
+	 */
+int  mdb_env_set_semaphore_name(MDB_env *env, const char *name);
+
 	/** @brief Get the maximum size of keys and #MDB_DUPSORT data we can write.
 	 *
 	 * Depends on the compile-time constant #MDB_MAXKEYSIZE. Default 511.
